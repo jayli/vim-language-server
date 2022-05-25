@@ -5,12 +5,20 @@ import { findProjectRoot } from "../common/util";
 import { INode } from "../lib/vimparser";
 import { Buffer, IFunction, IIdentifier } from "./buffer";
 import config from "./config";
+import {
+  funcArgIdentifierPattern,
+  globalIdentifierPattern,
+  localIdentifierPattern,
+  normalIdentifierPattern,
+  scriptIdentifierPattern
+} from "../common/patterns";
 // import logger from '../common/logger';
 
 // const log = logger('workspace')
 
 export class Workspace {
   private buffers: Record<string, Buffer> = {};
+  private pendingBuffers: Record<string, Promise<Buffer>> = {};
 
   public isExistsBuffer(uri: string) {
     if (this.buffers[uri]) {
@@ -26,19 +34,31 @@ export class Workspace {
     if (this.buffers[uri]) {
       this.buffers[uri].updateBufferByNode(node);
     } else {
-      let projectRoot = await findProjectRoot(
-        URI.parse(uri).fsPath,
-        config.indexes.projectRootPatterns,
-      );
-      if (config.vimruntime.trim() !== '' && projectRoot.indexOf(config.vimruntime) === 0) {
-        projectRoot = config.vimruntime;
-      }
-      this.buffers[uri] = new Buffer(uri, projectRoot, node);
+      const loadPromise = this.loadBuffer(uri, node)
+      this.pendingBuffers[uri] = loadPromise
+      this.buffers[uri] = await loadPromise
+      delete this.pendingBuffers[uri]
     }
   }
 
-  public getBufferByUri(uri: string): Buffer | undefined {
-    return this.buffers[uri];
+  private async loadBuffer(uri: string, node: INode) : Promise<Buffer> {
+    let projectRoot = await findProjectRoot(
+      URI.parse(uri).fsPath,
+      config.indexes.projectRootPatterns,
+    );
+    if (config.vimruntime.trim() !== '' && projectRoot.indexOf(config.vimruntime) === 0) {
+      projectRoot = config.vimruntime;
+    }
+    return new Buffer(uri, projectRoot, node);
+  }
+
+  public getBufferByUri(uri: string): Promise<Buffer | undefined> {
+    if (this.buffers[uri]) {
+      return Promise.resolve(this.buffers[uri])
+    } else if (this.pendingBuffers[uri]) {
+      return this.pendingBuffers[uri]
+    }
+    return Promise.resolve(undefined)
   }
 
   public getFunctionItems(uri: string) {
@@ -65,9 +85,9 @@ export class Workspace {
   } {
     let isFunArg: boolean = false;
     let res: Location[] = [];
-    if (/^((g|b):\w+(\.\w+)*|\w+(#\w+)+)$/.test(name)) {
+    if (globalIdentifierPattern.test(name)) {
       res = this.getGlobalLocation(name, uri, position, locationType);
-    } else if (/^([a-zA-Z_]\w*(\.\w+)*)$/.test(name)) {
+    } else if (normalIdentifierPattern.test(name)) {
       // get function args references first
       res = this.getFunArgLocation(name, uri, position, locationType);
       if (res.length) {
@@ -78,7 +98,7 @@ export class Workspace {
           res = this.getGlobalLocation(name, uri, position, locationType);
         }
       }
-    } else if (/^((s:|<SID>)\w+(\.\w+)*)$/.test(name) && this.buffers[uri]) {
+    } else if (scriptIdentifierPattern.test(name) && this.buffers[uri]) {
       const names = [name];
       if (/^<SID>/.test(name)) {
         names.push(name.replace(/^<SID>/, "s:"));
@@ -86,9 +106,9 @@ export class Workspace {
         names.push(name.replace(/^s:/, "<SID>"));
       }
       res = this.getScriptLocation(names, uri, position, locationType);
-    } else if (/^(l:\w+(\.\w+)*)$/.test(name) && this.buffers[uri]) {
+    } else if (localIdentifierPattern.test(name) && this.buffers[uri]) {
       res = this.getLocalLocation(name, uri, position, locationType);
-    } else if (/^(a:\w+(\.\w+)*)$/.test(name) && this.buffers[uri]) {
+    } else if (funcArgIdentifierPattern.test(name) && this.buffers[uri]) {
       res = this.getAIdentifierLocation(name, uri, position, locationType);
     }
 
@@ -117,9 +137,9 @@ export class Workspace {
   } {
     let isFunArg: boolean = false;
     let res: Location[] = [];
-    if (/^((g|b):\w+(\.\w+)*|\w+(#\w+)+)$/.test(name) && this.buffers[uri]) {
+    if (globalIdentifierPattern.test(name) && this.buffers[uri]) {
       res = this.getGlobalLocationByUri(name, uri, position, locationType);
-    } else if (/^([a-zA-Z_]\w*(\.\w+)*)$/.test(name) && this.buffers[uri]) {
+    } else if (normalIdentifierPattern.test(name) && this.buffers[uri]) {
       // get function args references first
       res = this.getFunArgLocation(name, uri, position, locationType);
       if (res.length) {
@@ -130,7 +150,7 @@ export class Workspace {
           res = this.getGlobalLocationByUri(name, uri, position, locationType);
         }
       }
-    } else if (/^((s:|<SID>)\w+(\.\w+)*)$/.test(name) && this.buffers[uri]) {
+    } else if (scriptIdentifierPattern.test(name) && this.buffers[uri]) {
       const names = [name];
       if (/^<SID>/.test(name)) {
         names.push(name.replace(/^<SID>/, "s:"));
@@ -138,9 +158,9 @@ export class Workspace {
         names.push(name.replace(/^s:/, "<SID>"));
       }
       res = this.getScriptLocation(names, uri, position, locationType);
-    } else if (/^(l:\w+(\.\w+)*)$/.test(name) && this.buffers[uri]) {
+    } else if (localIdentifierPattern.test(name) && this.buffers[uri]) {
       res = this.getLocalLocation(name, uri, position, locationType);
-    } else if (/^(a:\w+(\.\w+)*)$/.test(name) && this.buffers[uri]) {
+    } else if (funcArgIdentifierPattern.test(name) && this.buffers[uri]) {
       res = this.getAIdentifierLocation(name, uri, position, locationType);
     }
 
